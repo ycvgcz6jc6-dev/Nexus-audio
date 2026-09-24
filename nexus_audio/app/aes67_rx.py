@@ -5,7 +5,7 @@ SAP_GROUP='239.255.255.255'; SAP_PORT=9875
 
 class SapDiscovery:
     def __init__(self, interface, interface_ip):
-        self.interface=interface; self.interface_ip=interface_ip; self.sessions={}; self.error=None; self._stop=threading.Event(); self._thread=None
+        self.interface=interface; self.interface_ip=interface_ip; self.sessions={}; self.error=None; self._stop=threading.Event(); self._thread=None; self.session_ttl_s=30
     def start(self):
         self._stop.clear(); self._thread=threading.Thread(target=self._run,daemon=True,name=f'sap-{self.interface}'); self._thread.start()
     def stop(self):
@@ -21,6 +21,7 @@ class SapDiscovery:
                 data,addr=s.recvfrom(65535); self._parse(data,addr)
             except socket.timeout:pass
             except Exception as e:self.error=str(e);time.sleep(1)
+            now=time.time(); self.sessions={k:v for k,v in self.sessions.items() if now-v.get('last_seen',0)<=self.session_ttl_s}
         s.close()
     def _parse(self,data,addr):
         if len(data)<8:return
@@ -42,13 +43,13 @@ class SapDiscovery:
 
 class Aes67Receiver:
     def __init__(self,cfg,fifo,interface_ip):
-        self.cfg=cfg;self.fifo=str(fifo);self.interface_ip=interface_ip;self.proc=None;self.state='stopped';self.error=None;self.logs=deque(maxlen=80);self._stop=threading.Event();self._log_thread=None
+        self.cfg=cfg;self.fifo=str(fifo);self.interface_ip=interface_ip;self.proc=None;self.sdp_path=None;self.state='stopped';self.error=None;self.logs=deque(maxlen=80);self._stop=threading.Event();self._log_thread=None
     def start(self):
         ip=self.cfg.get('multicast_ip');port=int(self.cfg.get('rtp_port',5004));pt=int(self.cfg.get('payload_type',96));rate=int(self.cfg.get('sample_rate',48000));ch=int(self.cfg.get('channels',2));codec=self.cfg.get('aes67_codec','L24').upper()
         if not ip: self.state='waiting_stream_selection';self.error='Set multicast_ip or select a discovered SAP/SDP session';return
         enc={'L16':'pcm_s16be','L24':'pcm_s24be'}.get(codec)
         if not enc:self.state='error';self.error=f'Unsupported AES67 codec {codec}; supported L16/L24';return
-        sdp=pathlib.Path(self.fifo).with_suffix('.sdp');sdp.write_text(f'''v=0\no=- 0 0 IN IP4 {self.interface_ip}\ns={self.cfg.get("name","AES67 RX")}\nc=IN IP4 {ip}\nt=0 0\nm=audio {port} RTP/AVP {pt}\na=rtpmap:{pt} {codec}/{rate}/{ch}\na=recvonly\n''')
+        sdp=pathlib.Path(self.fifo).with_suffix('.sdp');self.sdp_path=sdp;sdp.write_text(f'''v=0\no=- 0 0 IN IP4 {self.interface_ip}\ns={self.cfg.get("name","AES67 RX")}\nc=IN IP4 {ip}\nt=0 0\nm=audio {port} RTP/AVP {pt}\na=rtpmap:{pt} {codec}/{rate}/{ch}\na=recvonly\n''')
         # ffmpeg joins the RTP multicast described by SDP and normalizes to Sendspin PCM s16le/48k.
         cmd=['ffmpeg','-hide_banner','-loglevel','warning','-protocol_whitelist','file,udp,rtp','-i',str(sdp),'-map','0:a:0','-ac',str(ch),'-ar','48000','-f','s16le','-acodec','pcm_s16le','-y',self.fifo]
         try:
@@ -64,4 +65,7 @@ class Aes67Receiver:
             self.proc.terminate()
             try:self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:self.proc.kill()
+        if self.sdp_path and self.sdp_path.exists():
+            try:self.sdp_path.unlink()
+            except OSError:pass
     def status(self):return {'state':self.state,'error':self.error,'pid':self.proc.pid if self.proc and self.proc.poll() is None else None,'log_tail':list(self.logs)[-20:]}

@@ -1,5 +1,5 @@
 name: "Nexus Audio"
-version: "1.0.0-rc1"
+version: "1.0.0-rc3"
 slug: "ha_audio_input_gateway"
 description: "Nexus Audio by Mct. — AirPlay, Spotify Connect, Dante RX and AES67 to Music Assistant"
 arch: [amd64, aarch64]
@@ -59,3 +59,4 @@ schema:
       spotify_device_type: list(speaker|avr|computer)?
       spotify_normalisation: bool?
       spotify_autoplay: bool?
+url: "https://github.com/ycvgcz6jc6-dev/Nexus-audio"

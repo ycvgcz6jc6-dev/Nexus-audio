@@ -4,7 +4,8 @@ from sendspin_source import SendspinSourceBridge
 from aes67_rx import SapDiscovery, Aes67Receiver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
-OPTIONS='/data/options.json'; USER_CONFIG='/data/gateway_config.json'; RUNTIME=pathlib.Path('/data/runtime'); RUNTIME.mkdir(parents=True,exist_ok=True); VERSION='1.0.0-rc1'
+from nexus_diag import setup_logging, system_metrics, process_metrics, clock_metrics, build_bundle
+DATA_DIR=pathlib.Path(os.environ.get('NEXUS_DATA_DIR','/data')); OPTIONS=str(DATA_DIR/'options.json'); USER_CONFIG=str(DATA_DIR/'gateway_config.json'); RUNTIME=DATA_DIR/'runtime'; RUNTIME.mkdir(parents=True,exist_ok=True); VERSION='1.0.0-rc3'; LOG=setup_logging()
 
 def options():
     # UI-managed config overrides Supervisor options after first save.
@@ -33,7 +34,7 @@ def iface_ipv4(name):
 class Worker:
     def __init__(self,cfg,index=0):
         self.cfg=cfg;self.index=index;self.proc=None;self.state='stopped';self.error=None;self.sendspin=None;self.started_at=None;self.restarts=0;self.last_restart_at=None
-        self.logs=deque(maxlen=100);self._log_thread=None;self._watch_thread=None;self._stop=threading.Event();self.aes67=None
+        self.logs=deque(maxlen=250);self._log_thread=None;self._watch_thread=None;self._stop=threading.Event();self.aes67=None
         self.dir=RUNTIME/cfg['id'];self.dir.mkdir(parents=True,exist_ok=True);self.fifo=self.dir/'audio.pcm'
     def status(self):
         alive=bool(self.proc and self.proc.poll() is None)
@@ -42,7 +43,7 @@ class Worker:
           'interface':self.cfg.get('interface'),'interface_ip':iface_ipv4(self.cfg.get('interface','')),'channels':self.cfg.get('channels',2),'sample_rate':self.cfg.get('sample_rate',48000),
           'state':self.state,'process_alive':alive,'pid':self.proc.pid if alive else None,'started_at':self.started_at,'uptime_s':round(time.time()-self.started_at,1) if self.started_at else None,
           'restarts':self.restarts,'last_restart_at':self.last_restart_at,'fifo':str(self.fifo),'error':self.error,'audio':self._audio_diag(ss),
-          'dante':self._dante_diag() if self.cfg['type']=='dante_rx' else None,'aes67':self.aes67.status() if self.aes67 else None,'sendspin':ss,'log_tail':list(self.logs)[-20:]}
+          'process_metrics':process_metrics(self.proc.pid if alive else None),'dante':self._dante_diag() if self.cfg['type']=='dante_rx' else None,'aes67':self.aes67.status() if self.aes67 else None,'sendspin':ss,'log_tail':list(self.logs)[-20:]}
     def _audio_diag(self,ss):
         if not ss:return {'present':False,'last_audio_age_s':None,'bytes_read':0,'peak_dbfs':None}
         age=(time.time()-ss['last_pcm_at']) if ss.get('last_pcm_at') else None
@@ -51,24 +52,24 @@ class Worker:
         d=options().get('dante',{}); idx=self.index; clock=pathlib.Path(d.get('clock_path','/share/usrvclock'))
         return {'backend':'inferno2pipe' if self.cfg.get('dante_mode','native_dante')=='native_dante' else 'aes67','clock_path':str(clock),'clock_available':clock.exists(),
           'process_id':int(self.cfg.get('process_id',idx+1)),'alt_port':int(self.cfg.get('alt_port',14000+idx*10)),'rx_latency_ms':float(self.cfg.get('rx_latency_ms',10)),
-          'device_name':self.cfg['name'],'routing':'Patch transmitter channels to this RX device in Dante Controller'}
+          'device_name':self.cfg['name'],'clock_health':clock_metrics(clock),'routing':'Patch transmitter channels to this RX device in Dante Controller'}
     def _prepare_fifo(self):
         if self.fifo.exists():self.fifo.unlink()
         os.mkfifo(self.fifo)
-    def _start_sendspin(self,channels=2,sample_rate=48000,bit_depth=16):
+    def _start_sendspin(self,channels=2,sample_rate=48000,bit_depth=16,input_sample_rate=None):
         ma=options().get('music_assistant',{});host=ma.get('host','');port=ma.get('port',8927)
         if not host:self.error='Music Assistant host is empty; receiver runs but Live Input is not connected';return
-        self.sendspin=SendspinSourceBridge(self.cfg['id'],self.cfg['name'],self.fifo,self.dir/'sendspin',f'ws://{host}:{port}/sendspin',channels,sample_rate,bit_depth);self.sendspin.start()
+        self.sendspin=SendspinSourceBridge(self.cfg['id'],self.cfg['name'],self.fifo,self.dir/'sendspin',f'ws://{host}:{port}/sendspin',channels,sample_rate,bit_depth,input_sample_rate=input_sample_rate);self.sendspin.start()
     def _drain_logs(self):
         if not self.proc or not self.proc.stdout:return
         for line in self.proc.stdout:
-            self.logs.append(line.rstrip())
+            self.logs.append(line.rstrip());LOG.info('[%s/%s] %s',self.cfg.get('type'),self.cfg.get('id'),line.rstrip())
             if self._stop.is_set():break
     def _launch(self,cmd,env):
-        self.proc=subprocess.Popen(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+        LOG.info('Launching source=%s type=%s interface=%s command=%s',self.cfg.get('id'),self.cfg.get('type'),self.cfg.get('interface'),cmd[0]);self.proc=subprocess.Popen(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
         self.started_at=time.time();self._log_thread=threading.Thread(target=self._drain_logs,daemon=True,name=f'log-{self.cfg["id"]}');self._log_thread.start()
     def start(self):
-        self._stop.clear();self.error=None
+        self._stop.clear();self.error=None;LOG.info('Starting source=%s name=%s type=%s',self.cfg.get('id'),self.cfg.get('name'),self.cfg.get('type'))
         if not self.cfg.get('enabled',True):self.state='disabled';return
         if self.cfg['type']=='airplay':self._start_airplay()
         elif self.cfg['type']=='dante_rx':self._start_dante()
@@ -78,8 +79,8 @@ class Worker:
         if not iface_ipv4(self.cfg.get('interface','')):self.state='error';self.error='Selected interface has no IPv4 address';return
         self._prepare_fifo();conf=self.dir/'shairport-sync.conf';pw=self.cfg.get('airplay_password')
         password=f' password = "{pw}";' if pw else ''
-        conf.write_text(f'''general = {{ name = "{self.cfg['name']}"; interface = "{self.cfg['interface']}"; output_backend = "pipe";{password} }};\npipe = {{ name = "{self.fifo}"; output_rate = 48000; output_format = "S16_LE"; output_channels = 2; }};\n''')
-        try:self._launch(['shairport-sync','-c',str(conf)],os.environ.copy());self.state='airplay_ready';self._start_sendspin(2,48000,16);self._start_watchdog()
+        conf.write_text(f'''general = {{ name = "{self.cfg['name']}"; interface = "{self.cfg['interface']}"; output_backend = "pipe";{password} }};\npipe = {{ name = "{self.fifo}"; output_rate = 44100; output_format = "S16_LE"; output_channels = 2; }};\n''')
+        try:self._launch(['shairport-sync','-c',str(conf)],os.environ.copy());self.state='airplay_ready';self._start_sendspin(2,48000,16,input_sample_rate=44100);self._start_watchdog()
         except Exception as e:self.state='error';self.error=str(e)
     def _start_spotify(self):
         # librespot discovery/Spotify Connect source. The pipe backend emits raw PCM.
@@ -94,10 +95,10 @@ class Worker:
              '--bitrate',str(bitrate),'--backend','pipe','--device',str(self.fifo),'--format','S16',
              '--cache',str(cache),'--system-cache',str(cache),'--zeroconf-backend','libmdns']
         if self.cfg.get('spotify_normalisation',False):cmd.append('--enable-volume-normalisation')
-        if self.cfg.get('spotify_autoplay',True):cmd.append('--autoplay')
+        cmd.extend(['--autoplay','on' if self.cfg.get('spotify_autoplay',True) else 'off'])
         try:
             self._launch(cmd,os.environ.copy());self.state='spotify_connect_ready'
-            self._start_sendspin(2,44100,16);self._start_watchdog()
+            self._start_sendspin(2,48000,16,input_sample_rate=44100);self._start_watchdog()
         except Exception as e:self.state='error';self.error=f'librespot start failed: {e}'
     def _start_dante(self):
         if self.cfg.get('dante_mode','native_dante')=='aes67':return self._start_aes67()
@@ -136,7 +137,7 @@ class Worker:
             self.proc.terminate()
             try:self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:self.proc.kill()
-        self.state='stopped'
+        self.state='stopped';LOG.info('Stopped source=%s',self.cfg.get('id'))
 
 class Manager:
     def __init__(self):self.workers={};self.lock=threading.Lock();self.validation=[];self.sap={}
@@ -159,7 +160,8 @@ class Manager:
             for w in self.workers.values():w.stop()
             for s in self.sap.values():s.stop()
             self.workers={};self.sap={};cfgs=options().get('sources',[]);self.validation=self._validate(cfgs)
-            if self.validation:return
+            if self.validation:
+                LOG.error('Configuration validation failed: %s',self.validation);return
             for i,cfg in enumerate(cfgs):
                 w=Worker(cfg,i);self.workers[cfg['id']]=w;w.start()
                 if cfg.get('type')=='dante_rx' and cfg.get('dante_mode')=='aes67':
@@ -236,14 +238,16 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p=urlparse(self.path).path
         if p=='/logo.jpg':
-            fp=pathlib.Path('/app/nexus-audio.jpg');b=fp.read_bytes();self.send_response(200);self.send_header('Content-Type','image/jpeg');self.send_header('Cache-Control','public, max-age=86400');self.send_header('Content-Length',str(len(b)));self.end_headers();return self.wfile.write(b)
+            fp=pathlib.Path(__file__).with_name('nexus-audio.jpg');b=fp.read_bytes();self.send_response(200);self.send_header('Content-Type','image/jpeg');self.send_header('Cache-Control','public, max-age=86400');self.send_header('Content-Length',str(len(b)));self.end_headers();return self.wfile.write(b)
         if p in ('/','/index.html'):
             b=HTML.encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(b)));self.end_headers();return self.wfile.write(b)
-        if p=='/health':return self.sendj({'status':'ok' if not M.validation else 'config_error','version':VERSION,'validation_errors':M.validation})
+        if p=='/health':return self.sendj({'status':'ok' if not M.validation else 'config_error','version':VERSION,'validation_errors':M.validation,'system':system_metrics()})
         if p=='/api/interfaces':return self.sendj({'interfaces':interfaces()})
         if p=='/api/sources':return self.sendj({'sources':M.statuses(),'validation_errors':M.validation})
         if p=='/api/dante':return self.sendj({'native_backend':'Inferno inferno2pipe','clock':'external usrvclock from Statime/PTP','multi_rx':True,'sources':[s for s in M.statuses() if s['type']=='dante_rx'],'validation_errors':M.validation})
         if p=='/api/aes67/discovery':return self.sendj({'discovery':M.sap_status()})
+        if p=='/api/diagnostics':
+            fp=build_bundle(RUNTIME/'nexus-audio-diagnostics.zip',VERSION,options(),interfaces(),M.statuses(),M.sap_status());b=fp.read_bytes();self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Disposition','attachment; filename="nexus-audio-diagnostics.zip"');self.send_header('Content-Length',str(len(b)));self.end_headers();return self.wfile.write(b)
         return self.sendj({'error':'not found'},404)
     def do_POST(self):
         p=urlparse(self.path).path;data=self.bodyj()
@@ -262,4 +266,4 @@ def shutdown(*_):
     for s in M.sap.values():s.stop()
     raise SystemExit(0)
 if __name__=='__main__':
-    signal.signal(signal.SIGTERM,shutdown);signal.signal(signal.SIGINT,shutdown);print(f'Nexus Audio {VERSION}',flush=True);M.reload();ThreadingHTTPServer(('0.0.0.0',8099),H).serve_forever()
+    signal.signal(signal.SIGTERM,shutdown);signal.signal(signal.SIGINT,shutdown);LOG.info('Nexus Audio %s starting',VERSION);print(f'Nexus Audio {VERSION}',flush=True);M.reload();ThreadingHTTPServer(('0.0.0.0',8099),H).serve_forever()

@@ -1,7 +1,7 @@
 # Nexus Audio
 
 <p align="center">
-  <img src="nexus_audio/app/nexus-audio.jpg" alt="Nexus Audio by Mct." width="720">
+  <img src="app/nexus-audio.jpg" alt="Nexus Audio by Mct." width="720">
 </p>
 
 **Nexus Audio by Mct.** est une passerelle audio réseau pour Home Assistant OS. Elle rassemble plusieurs types d'entrées audio et les transforme en **Live Inputs Sendspin** utilisables dans **Music Assistant**.

@@ -3,26 +3,26 @@ import asyncio, json, pathlib, threading, time, os, errno, audioop, math
 from aiosendspin.client import SendspinClient
 from aiosendspin.models.player import SupportedAudioFormat
 from aiosendspin.models.source import ClientHelloSourceSupport
-from aiosendspin.models.types import AudioCodec, Roles, SourceCommand
+from aiosendspin.models.types import AudioCodec, Roles
 from aiosendspin.noise.keys import Identity, b64url_decode, generate_psk, psk_id_for
-from aiosendspin.noise.pairing_token import PSKPairingToken, encode_psk_token
+from aiosendspin.noise.pairing_token import PSKPairingToken, encode_token
 from aiosendspin.noise.trust_store import FileClientPairingStore, PairingPsk, PskCategory
 
 class SendspinSourceBridge:
     """Persistent Sendspin source@v1 client consuming interleaved raw PCM from a FIFO."""
-    def __init__(self, source_id, name, fifo, state_dir, server_url, channels=2, sample_rate=48000, bit_depth=16):
+    def __init__(self, source_id, name, fifo, state_dir, server_url, channels=2, sample_rate=48000, bit_depth=16, input_sample_rate=None):
         self.source_id=source_id; self.name=name; self.fifo=pathlib.Path(fifo)
         self.state_dir=pathlib.Path(state_dir); self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.server_url=server_url; self.channels=int(channels); self.sample_rate=int(sample_rate); self.bit_depth=int(bit_depth)
+        self.server_url=server_url; self.channels=int(channels); self.sample_rate=int(sample_rate); self.input_sample_rate=int(input_sample_rate or sample_rate); self.bit_depth=int(bit_depth); self._rate_state=None; self._pcm_pending=b''
         self.fmt=SupportedAudioFormat(codec=AudioCodec.PCM,channels=self.channels,sample_rate=self.sample_rate,bit_depth=self.bit_depth)
-        self.chunk_bytes=max(1,int(self.sample_rate*self.channels*(self.bit_depth//8)*.020))
+        self.chunk_bytes=max(1,int(self.input_sample_rate*self.channels*(self.bit_depth//8)*.020))
         self.state='initializing'; self.error=None; self.client_id=None; self.pairing_token=None
         self.paired=False; self.streaming=False; self.connected=False; self.bytes_sent=0; self.bytes_read=0; self.last_audio_at=None; self.last_pcm_at=None; self.peak_dbfs=None
         self._thread=None; self._stop=threading.Event(); self._loop=None; self._client=None; self._capture=None; self._fd=None
     def status(self):
         return {'state':self.state,'connected':self.connected,'paired':self.paired,'streaming':self.streaming,'client_id':self.client_id,
                 'pairing_token':self.pairing_token,'bytes_read':self.bytes_read,'bytes_sent':self.bytes_sent,'last_audio_at':self.last_audio_at,'last_pcm_at':self.last_pcm_at,'peak_dbfs':self.peak_dbfs,
-                'error':self.error,'server_url':self.server_url,'format':{'sample_rate':self.sample_rate,'bit_depth':self.bit_depth,'channels':self.channels}}
+                'error':self.error,'server_url':self.server_url,'input_format':{'sample_rate':self.input_sample_rate,'bit_depth':self.bit_depth,'channels':self.channels},'format':{'sample_rate':self.sample_rate,'bit_depth':self.bit_depth,'channels':self.channels},'resampling':self.input_sample_rate != self.sample_rate}
     def start(self):
         if self._thread and self._thread.is_alive(): return
         self._stop.clear(); self._thread=threading.Thread(target=self._thread_main,name=f'sendspin-{self.source_id}',daemon=True); self._thread.start()
@@ -42,10 +42,10 @@ class SendspinSourceBridge:
         if p.exists(): return Identity.from_private_bytes(b64url_decode(json.loads(p.read_text())['private_key']))
         ident=Identity.generate(); p.write_text(json.dumps({'private_key':ident.private_b64u},indent=2)); p.chmod(0o600); return ident
     async def _prepare_pairing(self, identity):
-        store=await FileClientPairingStore.open(self.state_dir/'pairing.json'); pp=await store.get_pairing_psk()
+        store=await FileClientPairingStore.open(self.state_dir/'pairing.json'); pp=await store.pairing_psk()
         if pp is None:
             key=generate_psk(); pp=PairingPsk(psk_id=psk_id_for(key),psk=key); await store.set_pairing_psk(pp)
-        self.pairing_token=encode_psk_token(PSKPairingToken(client_id=identity.peer_id,pairing_psk=pp.psk)); return store
+        self.pairing_token=encode_token(PSKPairingToken(client_id=identity.peer_id,pairing_psk=pp.psk)); return store
     async def _run(self):
         self._loop=asyncio.get_running_loop(); identity=self._load_identity(); self.client_id=identity.peer_id; store=await self._prepare_pairing(identity)
         while not self._stop.is_set():
@@ -68,8 +68,8 @@ class SendspinSourceBridge:
         source=getattr(payload,'source',None)
         if source is None:return
         cmd=getattr(source,'command',None)
-        if cmd==SourceCommand.START: asyncio.get_running_loop().create_task(self._start_capture())
-        elif cmd==SourceCommand.STOP: asyncio.get_running_loop().create_task(self._stop_capture())
+        if cmd=='start': asyncio.get_running_loop().create_task(self._start_capture())
+        elif cmd=='stop': asyncio.get_running_loop().create_task(self._stop_capture())
     async def _start_capture(self):
         if not self._client or not self._client.connected or self.streaming:return
         self.paired=bool(self._client.noise_psk and self._client.noise_psk.category is PskCategory.LONG_TERM)
@@ -101,8 +101,20 @@ class SendspinSourceBridge:
             data=self._read_chunk_nonblocking(); self.paired=bool(client.noise_psk and client.noise_psk.category is PskCategory.LONG_TERM)
             if not data: await asyncio.sleep(.005); continue
             self.bytes_read+=len(data); self.last_pcm_at=time.time()
+            # FIFO reads can end between PCM frames; carry the remainder forward.
+            data=self._pcm_pending+data
+            frame_bytes=self.channels*(self.bit_depth//8)
+            complete=len(data)//frame_bytes*frame_bytes
+            self._pcm_pending=data[complete:]; data=data[:complete]
+            if not data: continue
             try:
                 peak=audioop.max(data,self.bit_depth//8); full=(1 << (self.bit_depth-1))-1; self.peak_dbfs=round(20*math.log10(max(peak,1)/full),1)
             except Exception: pass
-            if self.streaming and self._capture:
-                await self._capture.feed(data,capture_timestamp_us=client.now_us()); self.bytes_sent+=len(data); self.last_audio_at=time.time()
+            out=data
+            if self.input_sample_rate != self.sample_rate:
+                try:
+                    out,self._rate_state=audioop.ratecv(data,self.bit_depth//8,self.channels,self.input_sample_rate,self.sample_rate,self._rate_state)
+                except Exception as exc:
+                    self.error=f'resample {self.input_sample_rate}->{self.sample_rate}: {exc}'; await asyncio.sleep(.005); continue
+            if self.streaming and self._capture and out:
+                await self._capture.feed(out,capture_timestamp_us=client.now_us()); self.bytes_sent+=len(out); self.last_audio_at=time.time()

@@ -1,0 +1,53 @@
+name: Verify RC3
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r nexus_audio/requirements.txt pytest pyyaml
+      - run: python -m compileall -q nexus_audio/app && bash -n nexus_audio/run.sh && pytest -q
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build complete add-on
+        run: docker build --build-arg BUILD_ARCH=${{ matrix.arch }} -t nexus-audio:test nexus_audio
+      - name: Verify binaries and Python imports inside image
+        run: |
+          docker run --rm --entrypoint /bin/sh nexus-audio:test -ec '
+            python3 -c "import main, sendspin_source, aes67_rx, nexus_diag"
+            inferno2pipe --help
+            librespot --help
+            shairport-sync -V
+            ffmpeg -version
+          '
+      - name: Verify application startup and health endpoint
+        run: |
+          docker run -d --name nexus-test nexus-audio:test
+          trap 'docker logs nexus-test; docker rm -f nexus-test' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec nexus-test python3 -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8099/health")); assert d["status"] == "ok" and d["version"] == "1.0.0-rc3"'; then exit 0; fi
+            sleep 2
+          done
+          exit 1
