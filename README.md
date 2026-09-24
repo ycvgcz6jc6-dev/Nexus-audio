@@ -1,23 +1,12 @@
 # Nexus Audio
 
 <p align="center">
-  <img src="nexus_audio/app/nexus-audio.jpg" alt="Nexus Audio by Mct." width="720">
+  <img src="app/nexus-audio.jpg" alt="Nexus Audio by Mct." width="720">
 </p>
 
 **Nexus Audio by Mct.** est une passerelle audio réseau pour Home Assistant OS. Elle rassemble plusieurs types d'entrées audio et les transforme en **Live Inputs Sendspin** utilisables dans **Music Assistant**.
 
 > Version actuelle : **1.0.0-rc3** — candidate de validation terrain. Les moteurs sont intégrés, mais la chaîne Dante/PTP et les appareils réels doivent encore être validés sur l'installation cible avant de qualifier cette version de stable.
-
-
-## Installation / Installation
-
-**FR :** Dans Home Assistant, ouvrez la boutique des modules complémentaires/apps, puis **Dépôts**, et ajoutez `https://github.com/ycvgcz6jc6-dev/Nexus-audio`. Installez **Nexus Audio**, configurez vos sources dans les options du module et démarrez-le. Ouvrez ensuite son interface Ingress. Statime reste un service externe à installer/configurer pour Dante natif. Cette RC nécessite une validation audio sur votre matériel.
-
-**EN:** In Home Assistant, open the add-on/app store, select **Repositories**, and add `https://github.com/ycvgcz6jc6-dev/Nexus-audio`. Install **Nexus Audio**, configure sources in the add-on options and start it. Then open its Ingress interface. Native Dante requires a separately installed/configured Statime service. This RC still needs audio acceptance testing on your hardware.
-
-**FR :** Le port de gestion 8099 écoute sur le réseau local, sans authentification propre. Réservez son accès à un réseau de confiance ; ne l'exposez pas à Internet.
-
-**EN:** Management port 8099 listens on the local network without its own authentication. Restrict access to a trusted network; do not expose it to the Internet.
 
 ## 🇫🇷 Français
 
@@ -114,7 +103,7 @@ AES67 reste volontairement séparé du moteur Dante natif. Nexus Audio écoute l
 
 ### AirPlay
 
-AirPlay utilise le paquet Shairport Sync d’Alpine (AirPlay 1) : son PCM stéréo 44,1 kHz / 16 bits est rééchantillonné vers 48 kHz avant Sendspin. AirPlay 2 n’est pas fourni par ce paquet. AirPlay 2 et son horloge NQPTP doivent être isolés correctement du réseau Dante/PTP. Éviter de placer AirPlay 2 et Dante sur la même interface si leurs services PTP entrent en conflit.
+AirPlay utilise Shairport Sync et fournit à Sendspin un flux PCM stéréo 48 kHz / 16 bits. AirPlay 2 et son horloge NQPTP doivent être isolés correctement du réseau Dante/PTP. Éviter de placer AirPlay 2 et Dante sur la même interface si leurs services PTP entrent en conflit.
 
 ### Spotify Connect
 
@@ -123,7 +112,7 @@ Une source `spotify` lance librespot en mode Spotify Connect. Elle apparaît dan
 Chemin audio :
 
 ```text
-Spotify → librespot → PCM S16 / 44,1 kHz → rééchantillonnage 48 kHz → Sendspin → Music Assistant
+Spotify → librespot → PCM S16 / 44,1 kHz → Sendspin → Music Assistant
 ```
 
 librespot nécessite un compte Spotify compatible avec son fonctionnement Spotify Connect.
@@ -220,9 +209,3 @@ Spotify Connect is decoded by librespot at 44.1 kHz S16 stereo and explicitly re
 
 ## RC3 — Normalisation Live Input Music Assistant
 Spotify Connect est décodé par librespot en 44,1 kHz S16 stéréo puis rééchantillonné explicitement par Nexus Audio en 48 kHz S16 stéréo avant Sendspin. Les diagnostics affichent le format entrant et le format envoyé à Music Assistant.
-
-## License / Licence
-
-© 2026 Cyprien De Waele — Nexus Audio / Mct.
-
-Nexus Audio original code: Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE) and [third-party notices](THIRD_PARTY_NOTICES.md). Third-party engines retain their own licenses.

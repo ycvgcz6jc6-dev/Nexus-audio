@@ -1,5 +1,5 @@
 name: "Nexus Audio"
-version: "1.0.0-rc4"
+version: "1.0.0-rc5"
 slug: "ha_audio_input_gateway"
 description: "Nexus Audio by Mct. — AirPlay, Spotify Connect, Dante RX and AES67 to Music Assistant"
 arch: [amd64, aarch64]
@@ -7,7 +7,7 @@ init: false
 host_network: true
 ingress: true
 ingress_port: 8099
-panel_icon: "mdi:waveform"
+panel_icon: "mdi:audio-waveform"
 panel_title: "Nexus Audio"
 audio: true
 hassio_api: true
