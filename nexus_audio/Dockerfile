@@ -13,7 +13,7 @@ FROM ${BUILD_FROM}
 ARG BUILD_VERSION=1.0.0-rc3
 ARG BUILD_ARCH
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="addon" io.hass.arch="${BUILD_ARCH}" org.opencontainers.image.licenses="Apache-2.0" org.opencontainers.image.source="https://github.com/ycvgcz6jc6-dev/Nexus-audio"
-RUN apk add --no-cache python3 py3-pip iproute2 avahi-tools ffmpeg alsa-utils shairport-sync libgcc libssl3 libcrypto3
+RUN apk add --no-cache python3 py3-pip iproute2 dbus avahi avahi-tools ffmpeg alsa-utils shairport-sync libgcc libssl3 libcrypto3
 COPY requirements.txt /tmp/requirements.txt
 RUN apk add --no-cache --virtual .python-build build-base python3-dev libffi-dev openssl-dev cargo && pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt && apk del .python-build
 COPY --from=inferno-builder /src/target/release/inferno2pipe /usr/local/bin/inferno2pipe
