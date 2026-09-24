@@ -106,11 +106,15 @@ def test_source_commands_use_sdk_payload(tmp_path):
 
 def test_diagnostics_redacts_source_pairing(modules,tmp_path):
     _,diag=modules
-    bundle=diag.build_bundle(tmp_path/'diagnostics.zip','1.0.0-rc3',{'airplay_password':'PRIVATE'},[],[{'sendspin':{'pairing_token':'PRIVATE','paired':False}}],[])
+    diag.LOG_FILE.write_text('Worker started\nReceived PRIVATE\ntoken=unknown-credential\n')
+    bundle=diag.build_bundle(tmp_path/'diagnostics.zip','1.0.0-rc3',{'airplay_password':'PRIVATE'},[],[{'sendspin':{'pairing_token':'PRIVATE','paired':False},'log_tail':['Received PRIVATE']}],[])
     with zipfile.ZipFile(bundle) as archive:
         data=archive.read('diagnostics.json')
         assert b'PRIVATE' not in data
         assert json.loads(data)['sources'][0]['sendspin']['paired'] is False
+        logs=archive.read('logs/nexus-audio.log')
+        assert b'PRIVATE' not in logs and b'unknown-credential' not in logs
+        assert b'Worker started' in logs
 
 def test_existing_worker_paths_preserved(modules,monkeypatch):
     main,_=modules
