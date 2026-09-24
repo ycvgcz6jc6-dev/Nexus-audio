@@ -1,0 +1,2 @@
+aiosendspin==9.1.0
+audioop-lts==0.2.2; python_version >= "3.13"
