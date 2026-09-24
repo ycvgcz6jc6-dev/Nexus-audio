@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/base:2026.08.0
+ARG BUILD_FROM=ghcr.io/home-assistant/base:3.24-2026.08.0
 FROM rust:1.92-alpine3.23 AS inferno-builder
 RUN apk add --no-cache build-base git pkgconfig openssl-dev alsa-lib-dev linux-headers
 ENV RUSTFLAGS="-C target-feature=-crt-static"
