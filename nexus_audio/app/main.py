@@ -5,7 +5,7 @@ from aes67_rx import SapDiscovery, Aes67Receiver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from nexus_diag import setup_logging, system_metrics, process_metrics, clock_metrics, build_bundle
-DATA_DIR=pathlib.Path(os.environ.get('NEXUS_DATA_DIR','/data')); OPTIONS=str(DATA_DIR/'options.json'); USER_CONFIG=str(DATA_DIR/'gateway_config.json'); RUNTIME=DATA_DIR/'runtime'; RUNTIME.mkdir(parents=True,exist_ok=True); VERSION='1.0.0-rc3'; LOG=setup_logging()
+DATA_DIR=pathlib.Path(os.environ.get('NEXUS_DATA_DIR','/data')); OPTIONS=str(DATA_DIR/'options.json'); USER_CONFIG=str(DATA_DIR/'gateway_config.json'); RUNTIME=DATA_DIR/'runtime'; RUNTIME.mkdir(parents=True,exist_ok=True); VERSION='1.0.0-rc5'; LOG=setup_logging()
 
 def options():
     # UI-managed config overrides Supervisor options after first save.
