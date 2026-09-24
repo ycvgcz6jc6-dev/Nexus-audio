@@ -4,10 +4,10 @@ RUN apk add --no-cache build-base git pkgconfig openssl-dev alsa-lib-dev linux-h
 ENV RUSTFLAGS="-C target-feature=-crt-static"
 WORKDIR /src
 ARG INFERNO_REF=9abfab97c609bd8a5a3a4cae21b919972fd44937
-RUN git init . && git remote add origin https://github.com/salanki/inferno.git && git fetch --depth 1 origin ${INFERNO_REF} && git checkout FETCH_HEAD && cargo build --locked --release -p inferno2pipe
+RUN git init . && git remote add origin https://github.com/salanki/inferno.git && git fetch --depth 1 origin ${INFERNO_REF} && git checkout FETCH_HEAD && git submodule update --init --recursive && cargo build --locked --release -p inferno2pipe
 WORKDIR /librespot
 ARG LIBRESPOT_REF=383a6f6969f23b3e3cbc693747101cb9c92463dc
-RUN git init . && git remote add origin https://github.com/librespot-org/librespot.git && git fetch --depth 1 origin ${LIBRESPOT_REF} && git checkout FETCH_HEAD && cargo build --locked --release --no-default-features --features "with-libmdns"
+RUN git init . && git remote add origin https://github.com/librespot-org/librespot.git && git fetch --depth 1 origin ${LIBRESPOT_REF} && git checkout FETCH_HEAD && git submodule update --init --recursive && cargo build --locked --release --no-default-features --features "with-libmdns"
 
 FROM ${BUILD_FROM}
 ARG BUILD_VERSION=1.0.0-rc3
