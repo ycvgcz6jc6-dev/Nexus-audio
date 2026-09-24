@@ -1,4 +1,4 @@
-import json, logging, logging.handlers, os, pathlib, time, zipfile
+import json, logging, logging.handlers, os, pathlib, time, zipfile, re
 
 LOG_DIR=pathlib.Path(os.environ.get('NEXUS_DATA_DIR','/data'))/'logs'; LOG_DIR.mkdir(parents=True,exist_ok=True)
 LOG_FILE=LOG_DIR/'nexus-audio.log'
@@ -12,10 +12,25 @@ def setup_logging():
     sh=logging.StreamHandler();sh.setFormatter(fmt);sh.setLevel(logging.INFO)
     root.addHandler(fh);root.addHandler(sh);return root
 
-def redact(obj):
+def secret_values(obj):
+    values=set()
     if isinstance(obj,dict):
-        return {k:('***REDACTED***' if any(x in k.lower() for x in SECRET_KEYS) else redact(v)) for k,v in obj.items()}
-    if isinstance(obj,list):return [redact(x) for x in obj]
+        for key,value in obj.items():
+            if any(part in key.lower() for part in SECRET_KEYS) and isinstance(value,str) and value:
+                values.add(value)
+            values.update(secret_values(value))
+    elif isinstance(obj,list):
+        for value in obj:values.update(secret_values(value))
+    return values
+
+def redact(obj, secrets=()):
+    if isinstance(obj,dict):
+        return {k:('***REDACTED***' if any(x in k.lower() for x in SECRET_KEYS) else redact(v,secrets)) for k,v in obj.items()}
+    if isinstance(obj,list):return [redact(x,secrets) for x in obj]
+    if isinstance(obj,str):
+        for secret in sorted(secrets,key=len,reverse=True):obj=obj.replace(secret,'***REDACTED***')
+        obj=re.sub(r'SP:[A-Za-z0-9_:-]+','***REDACTED***',obj)
+        obj=re.sub(r'(?im)^.*(?:password|token|psk|secret|credential|private_key|authorization)\s*[=:].*$', '[REDACTED: credential-bearing log line]', obj)
     return obj
 
 def system_metrics():
@@ -51,11 +66,13 @@ def clock_metrics(path):
 
 def build_bundle(target,version,config,interfaces,sources,sap):
     target=pathlib.Path(target); tmp=target.parent/'diag-tmp'; tmp.mkdir(parents=True,exist_ok=True)
-    payload={'generated_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'version':version,'system':system_metrics(),'interfaces':interfaces,'sources':sources,'sap':sap,'config':redact(config)}
-    (tmp/'diagnostics.json').write_text(json.dumps(redact(payload),indent=2,ensure_ascii=False))
+    payload={'generated_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'version':version,'system':system_metrics(),'interfaces':interfaces,'sources':sources,'sap':sap,'config':config}
+    secrets=secret_values(payload)
+    (tmp/'diagnostics.json').write_text(json.dumps(redact(payload,secrets),indent=2,ensure_ascii=False))
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
         z.write(tmp/'diagnostics.json','diagnostics.json')
-        for f in sorted(LOG_DIR.glob('nexus-audio.log*')): z.write(f,'logs/'+f.name)
+        for f in sorted(LOG_DIR.glob('nexus-audio.log*')):
+            z.writestr('logs/'+f.name,redact(f.read_text(errors='replace'),secrets))
     try:(tmp/'diagnostics.json').unlink();tmp.rmdir()
     except OSError:pass
     return target
