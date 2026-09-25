@@ -1,7 +1,0 @@
-Nexus Audio 1.0.0-rc5 — paquet complet
-Remplace le CONTENU du dossier nexus_audio/ du dépôt GitHub par le contenu de ce ZIP.
-Ne supprime surtout pas les données /data de l'application Home Assistant : identités et appairages Sendspin y restent.
-
-Cette RC5 repart de la RC3 connue et conserve son sendspin_source.py.
-Ajouts : versions cohérentes, copie token, menu NIC, changement NIC source par source,
-Spotify limité à l'IPv4 choisie (--zeroconf-interface), logos.
